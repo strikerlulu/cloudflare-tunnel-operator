@@ -6,6 +6,20 @@ cliVersion: 4.15.0
 domain: strikerlulu.me
 layout:
 - go.kubebuilder.io/v4
+plugins:
+  helm.kubebuilder.io/v2-alpha:
+    manifests: dist/install.yaml
+    output: dist
 projectName: cloudflare-tunnel-operator
 repo: github.com/strikerlulu/cloudflare-tunnel-operator
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: strikerlulu.me
+  group: networking
+  kind: Tunnel
+  path: github.com/strikerlulu/cloudflare-tunnel-operator/api/v1alpha1
+  version: v1alpha1
 version: "3"

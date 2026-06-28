@@ -1,0 +1,15 @@
+apiVersion: networking.strikerlulu.me/v1alpha1
+kind: Tunnel
+metadata:
+  labels:
+    app.kubernetes.io/name: cloudflare-tunnel-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: tunnel-sample
+spec:
+  domain: example.com
+  serviceName: my-service
+  servicePort: 8080
+  secretRef: cloudflare-token
+  secretNamespace: cloudflare-system
+  sharedTunnelName: my-master-tunnel
+  accountID: ""

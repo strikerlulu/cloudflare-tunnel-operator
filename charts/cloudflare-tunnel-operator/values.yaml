@@ -1,0 +1,20 @@
+replicaCount: 1
+
+image:
+  repository: "<YOUR_REGISTRY>/cloudflare-tunnel-operator"
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+# Optional: Enable cloudflared connector deployment
+cloudflared:
+  enabled: false
+  # If tunnelToken is set, it creates a secret from it.
+  # Otherwise, reference an existing secret.
+  tunnelToken: ""
+  existingSecretName: ""
+  existingSecretNamespace: ""
+
+# Default Tunnel configuration
+defaultTunnel:
+  accountID: ""
+  secretNamespace: "default"
