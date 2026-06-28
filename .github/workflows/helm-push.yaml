@@ -5,21 +5,50 @@ on:
     branches:
       - main
     paths:
-      - 'charts/cloudflare-tunnel-operator/**'
+      - 'dist/chart/**'
+  release:
+    types: [published]
+
+env:
+  HELM_EXPERIMENTAL_OCI: '1'
+  REGISTRY: ghcr.io
+  CHART_REPO: ghcr.io/${{ github.repository_owner }}/charts
 
 jobs:
   helm-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
+
       - name: Install Helm
         uses: azure/setup-helm@v4
-      - name: Package and Push Helm Chart
+
+      - name: Log in to GHCR
         run: |
-          helm package charts/cloudflare-tunnel-operator
-          # Example: using GitHub Pages as Helm repo
-          # Replace with your actual repository URL
-          # helm repo add my-repo https://<org>.github.io/<repo>/
-          # helm push cloudflare-tunnel-operator-*.tgz oci://ghcr.io/<org>/helm
-        env:
-          HELM_EXPERIMENTAL_OCI: '1'
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} \
+            --username ${{ github.actor }} --password-stdin
+
+      - name: Determine chart version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(grep '^version:' dist/chart/Chart.yaml | awk '{print $2}')"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Package Helm chart
+        run: |
+          helm package dist/chart \
+            --version "${{ steps.version.outputs.version }}" \
+            --app-version "${{ steps.version.outputs.version }}" \
+            --destination .
+
+      - name: Push Helm chart to GHCR
+        run: |
+          helm push "cloudflare-tunnel-operator-${{ steps.version.outputs.version }}.tgz" \
+            "oci://${{ env.CHART_REPO }}"
