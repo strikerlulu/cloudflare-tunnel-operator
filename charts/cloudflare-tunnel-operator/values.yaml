@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: "<YOUR_REGISTRY>/cloudflare-tunnel-operator"
+  repository: "ghcr.io/strikerlulu/cloudflare-tunnel-operator"
   pullPolicy: IfNotPresent
   tag: "latest"
 

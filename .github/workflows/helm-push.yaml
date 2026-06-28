@@ -1,0 +1,25 @@
+name: Push Helm Chart
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'charts/cloudflare-tunnel-operator/**'
+
+jobs:
+  helm-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+      - name: Package and Push Helm Chart
+        run: |
+          helm package charts/cloudflare-tunnel-operator
+          # Example: using GitHub Pages as Helm repo
+          # Replace with your actual repository URL
+          # helm repo add my-repo https://<org>.github.io/<repo>/
+          # helm push cloudflare-tunnel-operator-*.tgz oci://ghcr.io/<org>/helm
+        env:
+          HELM_EXPERIMENTAL_OCI: '1'
