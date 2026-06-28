@@ -25,14 +25,20 @@ An operator to manage Cloudflare Tunnel resources.
 
 ## Setup and Installation
 
-1. **Helm Chart**: The Helm chart is located at `./charts/cloudflare-tunnel-operator`.
+1. **Helm Chart**: The Helm chart (operator, CRDs, RBAC, and an optional `cloudflared`
+   connector) lives at [`./dist/chart`](./dist/chart) and is published to GHCR as an OCI chart.
 
-   To install:
+   Install the published chart:
    ```bash
-   helm install my-operator ./charts/cloudflare-tunnel-operator \
-     --namespace cloudflare-system --create-namespace
+   helm install cloudflare-tunnel-operator \
+     oci://ghcr.io/strikerlulu/charts/cloudflare-tunnel-operator \
+     --version <version> \
+     --namespace cloudflare-tunnel-operator-system --create-namespace
    ```
-   For configuration details, refer to `charts/cloudflare-tunnel-operator/README.md`.
+   Released versions are listed under [Packages](https://github.com/strikerlulu/cloudflare-tunnel-operator/pkgs/container/charts%2Fcloudflare-tunnel-operator).
+
+   For configuration details (including the optional `cloudflared` connector) and local
+   testing instructions, refer to [`dist/chart/README.md`](./dist/chart/README.md).
 
 2. **Configuration**:
    - `CLOUDFLARE_ACCOUNT_ID`: Set in your `values.yaml` (Helm) or Deployment environment variables.

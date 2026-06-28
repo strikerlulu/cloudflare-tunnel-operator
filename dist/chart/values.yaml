@@ -176,3 +176,26 @@ prometheus:
 networkPolicy:
   enabled: false
 
+## Optional cloudflared connector deployment.
+## Use this if you want the chart to run a `cloudflared` Deployment
+## alongside the operator (e.g. for a shared/master tunnel).
+##
+cloudflared:
+  enabled: false
+
+  replicas: 1
+
+  image:
+    repository: cloudflare/cloudflared
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  ## If set, the chart creates a Secret containing this token.
+  ##
+  tunnelToken: ""
+
+  ## Use an existing Secret instead of tunnelToken.
+  ##
+  existingSecretName: ""
+  existingSecretNamespace: ""
+
