@@ -52,83 +52,8 @@ func (r *TunnelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	log.Info("Tunnel resource found", "Name", tunnel.Name, "Namespace", tunnel.Namespace)
-
-	secretNamespace := tunnel.Namespace
-	if tunnel.Spec.SecretNamespace != "" {
-		secretNamespace = tunnel.Spec.SecretNamespace
-	}
-
-	log.Info("Fetching secret", "Name", tunnel.Spec.SecretRef, "Namespace", secretNamespace)
-
-	secret := &corev1.Secret{}
-	err := r.Get(ctx, types.NamespacedName{Name: tunnel.Spec.SecretRef, Namespace: secretNamespace}, secret)
-	if err != nil {
-		log.Error(err, "Failed to get Cloudflare Secret")
-		return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
-	}
-	apiToken := string(secret.Data["api-token"])
-
-	cf := cloudflare.NewClient(option.WithAPIToken(apiToken))
-
-	log.Info("Checking deletion timestamp")
-
-	if !tunnel.ObjectMeta.DeletionTimestamp.IsZero() {
-		if controllerutil.ContainsFinalizer(tunnel, tunnelFinalizer) {
-			log.Info("Tunnel marked for deletion, removing configuration")
-
-			tunnels, err := cf.ZeroTrust.Tunnels.List(ctx, zero_trust.TunnelListParams{
-				AccountID: cloudflare.F(tunnel.Spec.AccountID),
-			})
-			if err != nil {
-				log.Error(err, "Failed to list tunnels for cleanup")
-				return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
-			}
-
-			var tunnelID string
-			for _, t := range tunnels.Result {
-				if t.Name == tunnel.Spec.SharedTunnelName {
-					tunnelID = t.ID
-					break
-				}
-			}
-
-			if tunnelID != "" {
-				config, err := cf.ZeroTrust.Tunnels.Cloudflared.Configurations.Get(ctx, tunnelID, zero_trust.TunnelCloudflaredConfigurationGetParams{
-					AccountID: cloudflare.F(tunnel.Spec.AccountID),
-				})
-				if err == nil {
-					// Filter out the rule to be removed
-					var newIngress []zero_trust.TunnelCloudflaredConfigurationUpdateParamsConfigIngress
-					for _, ing := range config.Config.Ingress {
-						// Only keep rules that are NOT the target domain AND are NOT the catch-all
-						if ing.Hostname != tunnel.Spec.Domain && ing.Hostname != "" {
-							newIngress = append(newIngress, zero_trust.TunnelCloudflaredConfigurationUpdateParamsConfigIngress{
-								Hostname: cloudflare.F(ing.Hostname),
-								Service:  cloudflare.F(ing.Service),
-							})
-						}
-					}
-					// Re-add the catch-all as the very last rule
-					newIngress = append(newIngress, zero_trust.TunnelCloudflaredConfigurationUpdateParamsConfigIngress{
-						Service: cloudflare.F("http_status:404"),
-					})
-
-					_, err = cf.ZeroTrust.Tunnels.Cloudflared.Configurations.Update(ctx, tunnelID, zero_trust.TunnelCloudflaredConfigurationUpdateParams{
-						AccountID: cloudflare.F(tunnel.Spec.AccountID),
-						Config:    cloudflare.F(zero_trust.TunnelCloudflaredConfigurationUpdateParamsConfig{Ingress: cloudflare.F(newIngress)}),
-					})
-					if err != nil {
-						log.Error(err, "Failed to remove route during cleanup")
-						return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
-					}
-				}
-			}
-
-			controllerutil.RemoveFinalizer(tunnel, tunnelFinalizer)
-			return ctrl.Result{}, r.Update(ctx, tunnel)
-		}
-		return ctrl.Result{}, nil
+	if !tunnel.DeletionTimestamp.IsZero() {
+		return r.reconcileDeletion(ctx, tunnel)
 	}
 
 	if !controllerutil.ContainsFinalizer(tunnel, tunnelFinalizer) {
@@ -137,8 +62,95 @@ func (r *TunnelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, r.Update(ctx, tunnel)
 	}
 
-	log.Info("Listing Cloudflare tunnels", "AccountID", tunnel.Spec.AccountID)
+	return r.reconcileNormal(ctx, tunnel)
+}
 
+func (r *TunnelReconciler) reconcileDeletion(ctx context.Context, tunnel *networkingv1alpha1.Tunnel) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	if !controllerutil.ContainsFinalizer(tunnel, tunnelFinalizer) {
+		return ctrl.Result{}, nil
+	}
+
+	log.Info("Tunnel marked for deletion, removing configuration")
+	apiToken, err := r.getAPIToken(ctx, tunnel)
+	if err != nil {
+		return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
+	}
+
+	cf := cloudflare.NewClient(option.WithAPIToken(apiToken))
+	tunnels, err := cf.ZeroTrust.Tunnels.List(ctx, zero_trust.TunnelListParams{
+		AccountID: cloudflare.F(tunnel.Spec.AccountID),
+	})
+	if err != nil {
+		log.Error(err, "Failed to list tunnels for cleanup")
+		return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
+	}
+
+	var tunnelID string
+	for _, t := range tunnels.Result {
+		if t.Name == tunnel.Spec.SharedTunnelName {
+			tunnelID = t.ID
+			break
+		}
+	}
+
+	if tunnelID != "" {
+		config, err := cf.ZeroTrust.Tunnels.Cloudflared.Configurations.Get(ctx, tunnelID, zero_trust.TunnelCloudflaredConfigurationGetParams{
+			AccountID: cloudflare.F(tunnel.Spec.AccountID),
+		})
+		if err == nil {
+			var newIngress []zero_trust.TunnelCloudflaredConfigurationUpdateParamsConfigIngress
+			for _, ing := range config.Config.Ingress {
+				if ing.Hostname != tunnel.Spec.Domain && ing.Hostname != "" {
+					newIngress = append(newIngress, zero_trust.TunnelCloudflaredConfigurationUpdateParamsConfigIngress{
+						Hostname: cloudflare.F(ing.Hostname),
+						Service:  cloudflare.F(ing.Service),
+					})
+				}
+			}
+			newIngress = append(newIngress, zero_trust.TunnelCloudflaredConfigurationUpdateParamsConfigIngress{
+				Service: cloudflare.F("http_status:404"),
+			})
+
+			_, err = cf.ZeroTrust.Tunnels.Cloudflared.Configurations.Update(ctx, tunnelID, zero_trust.TunnelCloudflaredConfigurationUpdateParams{
+				AccountID: cloudflare.F(tunnel.Spec.AccountID),
+				Config:    cloudflare.F(zero_trust.TunnelCloudflaredConfigurationUpdateParamsConfig{Ingress: cloudflare.F(newIngress)}),
+			})
+			if err != nil {
+				log.Error(err, "Failed to remove route during cleanup")
+				return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
+			}
+		}
+	}
+
+	controllerutil.RemoveFinalizer(tunnel, tunnelFinalizer)
+	return ctrl.Result{}, r.Update(ctx, tunnel)
+}
+
+func (r *TunnelReconciler) getAPIToken(ctx context.Context, tunnel *networkingv1alpha1.Tunnel) (string, error) {
+	log := logf.FromContext(ctx)
+	secretNamespace := tunnel.Namespace
+	if tunnel.Spec.SecretNamespace != "" {
+		secretNamespace = tunnel.Spec.SecretNamespace
+	}
+
+	secret := &corev1.Secret{}
+	err := r.Get(ctx, types.NamespacedName{Name: tunnel.Spec.SecretRef, Namespace: secretNamespace}, secret)
+	if err != nil {
+		log.Error(err, "Failed to get Cloudflare Secret")
+		return "", err
+	}
+	return string(secret.Data["api-token"]), nil
+}
+
+func (r *TunnelReconciler) reconcileNormal(ctx context.Context, tunnel *networkingv1alpha1.Tunnel) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	apiToken, err := r.getAPIToken(ctx, tunnel)
+	if err != nil {
+		return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
+	}
+
+	cf := cloudflare.NewClient(option.WithAPIToken(apiToken))
 	tunnels, err := cf.ZeroTrust.Tunnels.List(ctx, zero_trust.TunnelListParams{
 		AccountID: cloudflare.F(tunnel.Spec.AccountID),
 	})
@@ -159,8 +171,6 @@ func (r *TunnelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
 	}
 
-	log.Info("Found tunnel ID", "TunnelID", tunnelID)
-
 	config, err := cf.ZeroTrust.Tunnels.Cloudflared.Configurations.Get(ctx, tunnelID, zero_trust.TunnelCloudflaredConfigurationGetParams{
 		AccountID: cloudflare.F(tunnel.Spec.AccountID),
 	})
@@ -169,17 +179,13 @@ func (r *TunnelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
 	}
 
-	log.Info("Config retrieved", "TunnelID", tunnelID)
-
-	// Check if already configured
 	needsUpdate := false
 	var updatedIngress []zero_trust.TunnelCloudflaredConfigurationUpdateParamsConfigIngress
 	for _, ing := range config.Config.Ingress {
-		if ing.Hostname == "" { // catch-all
+		if ing.Hostname == "" {
 			continue
 		}
 		if ing.Hostname == tunnel.Spec.Domain {
-			// Check if service needs update
 			expectedService := fmt.Sprintf("http://%s:%d", tunnel.Spec.ServiceName, tunnel.Spec.ServicePort)
 			if ing.Service != expectedService {
 				needsUpdate = true
@@ -202,7 +208,6 @@ func (r *TunnelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	if !needsUpdate {
-		// Check if domain is missing
 		found := false
 		for _, ing := range updatedIngress {
 			if ing.Hostname == cloudflare.F(tunnel.Spec.Domain) {
@@ -220,11 +225,9 @@ func (r *TunnelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	if !needsUpdate {
-		log.Info("Route already up to date, skipping update")
 		return ctrl.Result{}, nil
 	}
 
-	// Add catch-all
 	updatedIngress = append(updatedIngress, zero_trust.TunnelCloudflaredConfigurationUpdateParamsConfigIngress{
 		Service: cloudflare.F("http_status:404"),
 	})
